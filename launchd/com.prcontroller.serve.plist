@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Template — do NOT load this file directly.
+  Run scripts/install.sh to generate the real plist with correct paths.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.prcontroller.serve</string>
+
+  <!-- Start on login and keep alive if it crashes -->
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PYTHON__</string>
+    <string>-m</string>
+    <string>pr_controller</string>
+    <string>serve</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__PROJECT_DIR__</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PRCTL_CONFIG</key>
+    <string>__HOME__/.pr-controller/config.yaml</string>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>__HOME__/.pr-controller/server.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/.pr-controller/server.log</string>
+
+  <!-- Throttle restarts to avoid log spam if the server crashes -->
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+</dict>
+</plist>

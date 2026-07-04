@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PR Controller</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<!-- ── Header ─────────────────────────────────────────────────────────────── -->
+<header class="header">
+  <div class="header-left">
+    <h1 class="header-title">📋 PR Controller</h1>
+  </div>
+  <div class="header-right">
+    <span class="header-meta" id="last-updated"></span>
+    <button class="settings-btn" id="settings-btn" title="Slack settings">⚙ Slack</button>
+    <button class="refresh-btn" id="refresh-btn">↻ Refresh</button>
+  </div>
+</header>
+
+<!-- ── Summary chips ──────────────────────────────────────────────────────── -->
+<div class="summary" id="summary"></div>
+
+<!-- ── Main two-column layout ─────────────────────────────────────────────── -->
+<div class="layout">
+  <main class="main" id="pr-cards">
+    <div class="loading">Loading PRs…</div>
+  </main>
+
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <span class="conn-dot" id="conn-dot" title="Live connection"></span>
+      <span class="sidebar-title">Activity</span>
+      <span class="unread-badge" id="unread-badge"></span>
+      <button class="clear-btn" id="clear-feed-btn" title="Clear feed">Clear</button>
+    </div>
+    <div class="feed-empty" id="feed-empty">No recent activity</div>
+    <div class="feed-items" id="feed-items"></div>
+  </aside>
+</div>
+
+<!-- ── Toast ──────────────────────────────────────────────────────────────── -->
+<div class="toast" id="toast"></div>
+
+<!-- ── Slack Settings Modal ───────────────────────────────────────────────── -->
+<div class="modal-overlay" id="settings-modal" hidden aria-modal="true" role="dialog">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 class="modal-title">Slack Integration</h2>
+      <button class="modal-close" id="settings-close" aria-label="Close">×</button>
+    </div>
+    <div class="modal-body">
+      <p class="modal-intro">
+        Configure a <strong>Slack Workflow Builder</strong> webhook so you can message
+        reviewers directly from the dashboard.
+      </p>
+
+      <details class="setup-guide">
+        <summary>How to create a webhook in Slack</summary>
+        <ol>
+          <li>Open Slack → <strong>Automations</strong> → <strong>New Workflow</strong>.</li>
+          <li>Choose <strong>From a webhook</strong> as the trigger.</li>
+          <li>Add these variables (all Text type):
+            <code>user_email</code>, <code>message</code>, <code>pr_number</code>,
+            <code>pr_title</code>, <code>pr_url</code>, <code>event_type</code>.</li>
+          <li>Add a <strong>Send a message to a person</strong> action using
+            <code>{{user_email}}</code> as the recipient and <code>{{message}}</code>
+            as the body. Optionally append <code>{{pr_url}}</code>.</li>
+          <li>Publish the workflow and copy the Webhook URL here.</li>
+        </ol>
+      </details>
+
+      <label class="field-label" for="webhook-url-input">Webhook URL</label>
+      <input
+        type="url"
+        class="field-input"
+        id="webhook-url-input"
+        placeholder="https://hooks.slack.com/triggers/…"
+        autocomplete="off"
+        spellcheck="false"
+      >
+      <p class="field-hint" id="webhook-current"></p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-danger" id="delete-webhook-btn" hidden>Remove</button>
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary" id="settings-cancel">Cancel</button>
+      <button class="btn btn-primary" id="save-webhook-btn">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Slack Composer Modal ────────────────────────────────────────────────── -->
+<div class="modal-overlay" id="composer-modal" hidden aria-modal="true" role="dialog">
+  <div class="modal modal-wide">
+    <div class="modal-header">
+      <h2 class="modal-title">Send Slack Message</h2>
+      <button class="modal-close" id="composer-close" aria-label="Close">×</button>
+    </div>
+    <div class="modal-body">
+
+      <!-- PR context chip -->
+      <div class="pr-context-chip" id="composer-pr-context" hidden></div>
+
+      <!-- Template -->
+      <label class="field-label" for="composer-template">Template</label>
+      <select class="field-input" id="composer-template">
+        <option value="review_request">Request review</option>
+        <option value="comments_addressed">Comments addressed — please re-review</option>
+        <option value="custom">Custom message</option>
+      </select>
+
+      <!-- Multi-select recipients -->
+      <label class="field-label">Recipients</label>
+      <div class="tag-input-wrapper" id="tag-input-wrapper">
+        <div class="tag-list" id="tag-list"></div>
+        <input
+          type="text"
+          class="tag-input-field"
+          id="tag-input-field"
+          placeholder="Type email or GitHub login…"
+          autocomplete="off"
+          spellcheck="false"
+        >
+        <div class="tag-suggestions" id="tag-suggestions" hidden></div>
+      </div>
+      <p class="field-hint">Press <kbd>Enter</kbd> or <kbd>,</kbd> to add. Select multiple people to message them all at once.</p>
+
+      <!-- Message body -->
+      <label class="field-label" for="composer-message">Message</label>
+      <textarea
+        class="field-textarea"
+        id="composer-message"
+        rows="6"
+        placeholder="Your message…"
+      ></textarea>
+
+    </div>
+    <div class="modal-footer">
+      <span class="composer-status" id="composer-status"></span>
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary" id="composer-cancel">Cancel</button>
+      <button class="btn btn-slack" id="composer-send" disabled>Send</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

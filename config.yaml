@@ -1,0 +1,29 @@
+github:
+  author_filter: "@me"
+
+polling:
+  # How often the background thread polls GitHub (seconds)
+  interval_seconds: 180
+
+notifications:
+  enabled: true
+  # Event types to send macOS notifications for
+  types:
+    - new_comment
+    - reply
+    - ci_fail
+    - approved
+    - changes_requested
+  # No notifications between these hours (24h format, local time)
+  quiet_hours:
+    start: "22:00"
+    end: "08:00"
+
+server:
+  host: "127.0.0.1"
+  port: 8765
+
+slack:
+  # Set to false to hide Slack buttons in the UI entirely
+  enabled: true
+  # The actual webhook URL is stored at ~/.pr-controller/slack.json (owner-only)
