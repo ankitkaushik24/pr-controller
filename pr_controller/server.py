@@ -14,8 +14,8 @@ from flask import Flask, Response, jsonify, request, send_from_directory, stream
 
 from . import slack as slack_module
 from . import state as state_module
-from .github_client import fetch_prs
-from .parser import buckets, compute
+from .github_client import reply_to_review_thread, resolve_review_threads
+from .parser import buckets
 from .poller import poll
 
 log = logging.getLogger(__name__)
@@ -52,6 +52,29 @@ def _update_cache(prs: list[dict]) -> None:
         generated_at = _cached_at
         count = len(prs)
     _broadcast({"type": "prs_updated", "generated_at": generated_at, "count": count})
+
+
+def _cached_snapshot() -> tuple[list[dict], str]:
+    with _cache_lock:
+        return list(_cached_prs), _cached_at
+
+
+def _remove_resolved_from_cache(thread_ids: list[str]) -> tuple[list[dict], str]:
+    """Drop resolved threads from the in-memory PR cache and broadcast an update."""
+    global _cached_prs, _cached_at
+    resolved = set(thread_ids)
+    with _cache_lock:
+        for pr in _cached_prs:
+            pr["unresolved"] = [
+                comment
+                for comment in pr.get("unresolved", [])
+                if comment.get("thread_id") not in resolved
+            ]
+        _cached_at = datetime.now(timezone.utc).isoformat()
+        prs = list(_cached_prs)
+        generated_at = _cached_at
+    _broadcast({"type": "prs_updated", "generated_at": generated_at, "count": len(prs)})
+    return prs, generated_at
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -150,6 +173,64 @@ def api_reviewers():
     ]
     reviewers.sort(key=lambda r: r["login"])
     return jsonify(reviewers)
+
+
+# ── Review thread actions ─────────────────────────────────────────────────────
+
+@app.route("/api/threads/reply", methods=["POST"])
+def api_thread_reply():
+    body = request.get_json(silent=True) or {}
+    thread_id = (body.get("thread_id") or "").strip()
+    reply_body = (body.get("body") or "").strip()
+    if not thread_id:
+        return jsonify({"error": "thread_id is required"}), 400
+    if not reply_body:
+        return jsonify({"error": "Reply body cannot be empty"}), 400
+    try:
+        comment = reply_to_review_thread(thread_id, reply_body)
+        return jsonify({
+            "ok": True,
+            "comment": {
+                "id": comment.get("id") or "",
+                "url": comment.get("url") or "",
+                "body": comment.get("bodyText") or reply_body,
+                "author": ((comment.get("author") or {}).get("login") or ""),
+            },
+        })
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        log.exception("Failed to reply to review thread %s", thread_id)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/threads/resolve", methods=["POST"])
+def api_threads_resolve():
+    body = request.get_json(silent=True) or {}
+    thread_ids = body.get("thread_ids") or []
+    if isinstance(body.get("thread_id"), str) and body.get("thread_id").strip():
+        thread_ids = [body["thread_id"], *thread_ids]
+    if not isinstance(thread_ids, list) or not thread_ids:
+        return jsonify({"error": "thread_ids is required"}), 400
+    cleaned = [str(tid).strip() for tid in thread_ids if str(tid).strip()]
+    if not cleaned:
+        return jsonify({"error": "thread_ids is required"}), 400
+    try:
+        result = resolve_review_threads(cleaned)
+        prs, generated_at = _cached_snapshot()
+        if result["resolved"]:
+            prs, generated_at = _remove_resolved_from_cache(result["resolved"])
+        return jsonify({
+            "ok": not result["errors"],
+            "resolved": result["resolved"],
+            "errors": result["errors"],
+            "prs": prs,
+            "summary": buckets(prs),
+            "generated_at": generated_at,
+        })
+    except Exception as exc:
+        log.exception("Failed to resolve review threads")
+        return jsonify({"error": str(exc)}), 500
 
 
 # ── Slack integration ─────────────────────────────────────────────────────────

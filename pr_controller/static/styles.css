@@ -290,6 +290,105 @@ a {
   margin: 2px 0;
   font-size: 13px;
 }
+.comment-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.comment-location {
+  color: var(--muted);
+  font-size: 12px;
+  margin-left: 6px;
+}
+.comment-select {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+.comment-select input {
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+.comment-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.copy-icon-btn {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+.copy-icon-btn:hover:not(:disabled) {
+  background: var(--border);
+  color: var(--text);
+}
+.copy-icon-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.block-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+.block-title-row .block-title {
+  margin-bottom: 0;
+}
+.block-title-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.reply-form {
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+.reply-form.hidden {
+  display: none;
+}
+.reply-textarea {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+  min-height: 64px;
+}
+.reply-textarea:focus {
+  outline: 2px solid var(--link);
+  outline-offset: 1px;
+}
+.reply-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 8px;
+}
 
 .empty-state {
   text-align: center;
@@ -643,6 +742,22 @@ a {
   background: var(--border);
   color: var(--text);
 }
+.btn-action-copy {
+  border-color: rgba(9, 105, 218, 0.3);
+  color: var(--link);
+}
+.btn-action-resolve {
+  border-color: rgba(26, 127, 55, 0.35);
+  color: var(--green);
+}
+.btn-action-resolve:hover:not(:disabled) {
+  background: var(--green-bg);
+  color: var(--green);
+}
+.btn-action-resolve:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 .btn-action-slack {
   border-color: rgba(74, 21, 75, 0.3);
   color: #4a154b;
@@ -846,6 +961,11 @@ a {
 }
 .btn-danger:hover:not(:disabled) {
   background: var(--red-bg);
+}
+.btn-sm {
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 6px;
 }
 
 /* ── Composer PR context banner ──────────────────────────────────────────── */

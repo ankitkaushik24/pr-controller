@@ -13,6 +13,7 @@ It is intentionally local-first:
 
 - Shows your open PRs with approvals, unresolved review comments, CI status, and current review state.
 - Polls GitHub for new review comments, replies to your comments, CI regressions, approvals, and change requests.
+- Lets you reply to review comments and resolve one or many unresolved threads from the dashboard.
 - Sends macOS notifications for new PR activity.
 - Opens the dashboard when a clickable notification is selected, when `terminal-notifier` is installed.
 - Keeps an activity feed with full comment bodies available from the UI.
@@ -158,6 +159,8 @@ Use the dashboard to:
 - Refresh PR status manually.
 - Read the activity feed.
 - Expand full comment bodies.
+- Reply to unresolved review comments.
+- Resolve selected or all unresolved review threads.
 - Open GitHub links for comments or PRs.
 - Send Slack follow-ups to reviewers by email.
 
@@ -243,6 +246,8 @@ Primary local endpoints:
 - `GET /api/events` streams live events through Server-Sent Events.
 - `GET /api/events/history` returns recent activity history.
 - `GET /api/reviewers` returns cached reviewer email suggestions.
+- `POST /api/threads/reply` posts a reply to a review thread (`thread_id`, `body`).
+- `POST /api/threads/resolve` resolves one or more review threads (`thread_ids`).
 - `GET /api/slack/config` returns Slack configuration status.
 - `POST /api/slack/config` saves a Slack webhook URL.
 - `DELETE /api/slack/config` removes the saved webhook URL.

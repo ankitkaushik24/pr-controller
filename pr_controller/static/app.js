@@ -26,6 +26,7 @@ const TEMPLATES = {
     `Hi, I've addressed all the review comments on PR #${pr.number}.\n\n${pr.title}\n${pr.url}\n\nPlease take a look and approve when you get a chance. Thank you!`,
   custom: (pr) => `PR #${pr.number}: ${pr.title}\n${pr.url}`,
 };
+const EMPTY_METADATA_VALUE = "N/A";
 
 // ── App state ─────────────────────────────────────────────────────────────────
 let unreadCount = 0;
@@ -34,6 +35,7 @@ let slackEnabled = false;
 let reviewers = []; // [{login, email}] from /api/reviewers
 let selectedEmails = new Set();
 let composerPR = null; // currently selected PR context
+let currentPRs = [];
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", () => {
@@ -547,6 +549,7 @@ function buildFeedItem(event, animate) {
   const hasBody =
     event.body && event.body !== event.snippet && event.body.length > 10;
   const eventId = event.id || "";
+  const canCopyComment = isCopyableReviewEvent(event);
 
   const div = document.createElement("div");
   div.className = `feed-item ${meta.cls}${animate ? "" : " visible"}`;
@@ -575,6 +578,11 @@ function buildFeedItem(event, animate) {
     }
     <div class="feed-item-footer">
       <a class="btn-action" href="${esc(githubUrl)}" target="_blank">View on GitHub</a>
+      ${
+        canCopyComment
+          ? `<button class="btn-action btn-action-copy" type="button">📋 Copy</button>`
+          : ""
+      }
       <button class="btn-action btn-action-slack"
         onclick="openComposerForEvent(${prNum}, '${esc(event.author || "")}')"
         title="Message this person in Slack">
@@ -582,6 +590,14 @@ function buildFeedItem(event, animate) {
       </button>
     </div>
   `;
+  if (canCopyComment) {
+    div.querySelector(".btn-action-copy").addEventListener("click", () => {
+      copyTextToClipboard(
+        formatEventReviewComment(event),
+        "Copied review comment.",
+      );
+    });
+  }
   return div;
 }
 
@@ -682,13 +698,16 @@ function classify(pr) {
 function renderCards(prs, cacheReady = true) {
   const container = document.getElementById("pr-cards");
   if (!cacheReady) {
+    currentPRs = [];
     container.innerHTML = `<div class="loading">Loading PRs…</div>`;
     return;
   }
   if (!prs || prs.length === 0) {
+    currentPRs = [];
     container.innerHTML = `<div class="empty-state">🎉 No open PRs</div>`;
     return;
   }
+  currentPRs = prs;
   container.innerHTML = prs.map(buildCard).join("");
 }
 
@@ -739,23 +758,73 @@ function buildCard(pr) {
   }
   if (pr.unresolved.length) {
     const items = pr.unresolved
-      .map((u) => {
-        const short = esc(u.snippet || (u.body || "").slice(0, 140));
+      .map((comment, commentIndex) => {
+        const short = esc(
+          comment.snippet || (comment.body || "").slice(0, 140),
+        );
+        const location = formatCommentLocation(comment);
         // Show full body if it's meaningfully longer than the snippet
-        const hasMore = u.body && u.body.length > (u.snippet || "").length + 10;
-        return `<li>
-        <a href="${esc(u.url)}" target="_blank">@${esc(u.author)}${u.outdated ? " (outdated)" : ""}</a>:
+        const hasMore =
+          comment.body &&
+          comment.body.length > (comment.snippet || "").length + 10;
+        const canAct = Boolean(comment.thread_id);
+        return `<li class="comment-item" data-thread-id="${esc(comment.thread_id || "")}">
+        <div class="comment-header">
+          <div class="comment-select">
+            <input
+              type="checkbox"
+              class="thread-check"
+              ${canAct ? "" : "disabled"}
+              onchange="onThreadSelectionChange(${pr.number})"
+              aria-label="Select comment by @${esc(comment.author)} to resolve"
+            >
+            <span>
+              <a href="${esc(comment.url)}" target="_blank">@${esc(comment.author)}${comment.outdated ? " (outdated)" : ""}</a>
+              ${location ? `<span class="comment-location">${esc(location)}</span>` : ""}
+            </span>
+          </div>
+          <span class="comment-actions">
+            <button class="copy-icon-btn" onclick="toggleReplyForm(${pr.number}, ${commentIndex})" title="Reply to this comment" aria-label="Reply to this comment" ${canAct ? "" : "disabled"}>↩</button>
+            <button class="copy-icon-btn" onclick="resolveOneThread(${pr.number}, ${commentIndex})" title="Resolve this comment" aria-label="Resolve this comment" ${canAct ? "" : "disabled"}>✓</button>
+            <button class="copy-icon-btn" onclick="copyReviewComment(${pr.number}, ${commentIndex})" title="Copy this review comment" aria-label="Copy this review comment">📋</button>
+          </span>
+        </div>
         <span class="comment-snippet">${short}</span>
         ${
           hasMore
             ? `<button class="inline-expand-btn" onclick="toggleInlineComment(this)">…more</button>
-          <span class="comment-full hidden">${esc(u.body)}</span>`
+          <span class="comment-full hidden">${esc(comment.body)}</span>`
             : ""
         }
+        <div class="reply-form hidden" id="reply-form-${pr.number}-${commentIndex}">
+          <textarea
+            class="reply-textarea"
+            rows="3"
+            placeholder="Write a reply…"
+            aria-label="Reply to @${esc(comment.author)}"
+          ></textarea>
+          <div class="reply-form-actions">
+            <button class="btn btn-secondary btn-sm" onclick="toggleReplyForm(${pr.number}, ${commentIndex})">Cancel</button>
+            <button class="btn btn-primary btn-sm" onclick="submitReply(${pr.number}, ${commentIndex})">Reply</button>
+          </div>
+        </div>
       </li>`;
       })
       .join("");
-    blocks += `<div class="block"><div class="block-title">🚫 unresolved comments</div><ul>${items}</ul></div>`;
+    blocks += `<div class="block" data-pr-unresolved="${pr.number}">
+      <div class="block-title-row">
+        <div class="block-title">🚫 unresolved comments</div>
+        <div class="block-title-actions">
+          <button class="btn-action btn-action-resolve" id="resolve-selected-${pr.number}" onclick="resolveSelectedThreads(${pr.number})" disabled title="Resolve selected comments">
+            ✓ Resolve selected
+          </button>
+          <button class="btn-action btn-action-resolve" onclick="resolveAllThreads(${pr.number})" title="Resolve all comments on this PR">
+            ✓ Resolve all
+          </button>
+        </div>
+      </div>
+      <ul>${items}</ul>
+    </div>`;
   }
 
   const approversText = pr.approvers.length
@@ -774,6 +843,24 @@ function buildCard(pr) {
     </button>`;
     })
     .join("");
+  const copyCommentsBtn = pr.unresolved.length
+    ? `<button class="btn-action btn-action-copy"
+      onclick="copyPRReviewComments(${pr.number})"
+      title="Copy all review comments">
+      📋 Copy all
+    </button>`
+    : "";
+  const messageSomeoneBtn =
+    reviewerBtns || slackEnabled
+      ? `<button class="btn-action btn-action-slack"
+      onclick="openComposerForCard(${pr.number}, null)"
+      title="Send a Slack message about this PR">
+      💬 Message someone…
+    </button>`
+      : "";
+  const cardActions = [copyCommentsBtn, reviewerBtns, messageSomeoneBtn]
+    .filter(Boolean)
+    .join("");
 
   return `
 <div class="card card-${state}">
@@ -787,15 +874,10 @@ function buildCard(pr) {
   <div class="card-sub">approved by: ${esc(approversText)}</div>
   ${blocks}
   ${
-    reviewerBtns || slackEnabled
+    cardActions
       ? `
   <div class="card-actions">
-    ${reviewerBtns}
-    <button class="btn-action btn-action-slack"
-      onclick="openComposerForCard(${pr.number}, null)"
-      title="Send a Slack message about this PR">
-      💬 Message someone…
-    </button>
+    ${cardActions}
   </div>`
       : ""
   }
@@ -819,6 +901,288 @@ window.toggleInlineComment = function (btn) {
   btn.textContent = visible ? "…more" : "less";
 };
 
+window.onThreadSelectionChange = function (prNum) {
+  const selected = _selectedThreadIds(prNum);
+  const btn = document.getElementById(`resolve-selected-${prNum}`);
+  if (!btn) return;
+  btn.disabled = selected.length === 0;
+  btn.textContent =
+    selected.length > 0
+      ? `✓ Resolve selected (${selected.length})`
+      : "✓ Resolve selected";
+};
+
+window.toggleReplyForm = function (prNum, commentIndex) {
+  const form = document.getElementById(`reply-form-${prNum}-${commentIndex}`);
+  if (!form) return;
+  const opening = form.classList.contains("hidden");
+  document.querySelectorAll(".reply-form").forEach((el) => {
+    el.classList.add("hidden");
+  });
+  if (opening) {
+    form.classList.remove("hidden");
+    const textarea = form.querySelector(".reply-textarea");
+    if (textarea) {
+      textarea.focus();
+    }
+  }
+};
+
+window.submitReply = async function (prNum, commentIndex) {
+  const prData = _findCachedPR(prNum);
+  const comment = prData ? prData.unresolved[commentIndex] : null;
+  const form = document.getElementById(`reply-form-${prNum}-${commentIndex}`);
+  const textarea = form ? form.querySelector(".reply-textarea") : null;
+  const body = textarea ? textarea.value.trim() : "";
+  if (!prData || !comment || !comment.thread_id) {
+    showToast("Review comment not found.", true);
+    return;
+  }
+  if (!body) {
+    showToast("Reply cannot be empty.", true);
+    return;
+  }
+  const sendBtn = form.querySelector(".btn-primary");
+  if (sendBtn) sendBtn.disabled = true;
+  try {
+    const res = await fetch("/api/threads/reply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ thread_id: comment.thread_id, body }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error)
+      throw new Error(data.error || `HTTP ${res.status}`);
+    if (textarea) textarea.value = "";
+    form.classList.add("hidden");
+    showToast("Reply posted.");
+  } catch (e) {
+    showToast("Reply failed: " + e.message, true);
+  } finally {
+    if (sendBtn) sendBtn.disabled = false;
+  }
+};
+
+window.resolveOneThread = function (prNum, commentIndex) {
+  const prData = _findCachedPR(prNum);
+  const comment = prData ? prData.unresolved[commentIndex] : null;
+  if (!comment || !comment.thread_id) {
+    showToast("Review comment not found.", true);
+    return;
+  }
+  resolveThreads(prNum, [comment.thread_id]);
+};
+
+window.resolveSelectedThreads = function (prNum) {
+  const threadIds = _selectedThreadIds(prNum);
+  if (!threadIds.length) {
+    showToast("Select at least one comment to resolve.", true);
+    return;
+  }
+  resolveThreads(prNum, threadIds);
+};
+
+window.resolveAllThreads = function (prNum) {
+  const prData = _findCachedPR(prNum);
+  if (!prData || !prData.unresolved.length) {
+    showToast("No review comments to resolve.", true);
+    return;
+  }
+  const threadIds = prData.unresolved
+    .map((comment) => comment.thread_id)
+    .filter(Boolean);
+  if (!threadIds.length) {
+    showToast("Missing thread IDs for these comments.", true);
+    return;
+  }
+  resolveThreads(prNum, threadIds);
+};
+
+async function resolveThreads(prNum, threadIds) {
+  const uniqueIds = [...new Set(threadIds.filter(Boolean))];
+  if (!uniqueIds.length) {
+    showToast("No threads to resolve.", true);
+    return;
+  }
+  try {
+    const res = await fetch("/api/threads/resolve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ thread_ids: uniqueIds }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error)
+      throw new Error(data.error || `HTTP ${res.status}`);
+    if (data.prs) {
+      renderSummary(data.summary);
+      renderCards(data.prs, Boolean(data.generated_at));
+      renderTimestamp(data.generated_at);
+    }
+    const resolvedCount = (data.resolved || []).length;
+    const errorCount = (data.errors || []).length;
+    if (resolvedCount && !errorCount) {
+      showToast(
+        `Resolved ${resolvedCount} comment${resolvedCount === 1 ? "" : "s"}.`,
+      );
+    } else if (resolvedCount && errorCount) {
+      showToast(`Resolved ${resolvedCount}, failed ${errorCount}.`, true);
+    } else {
+      const firstError =
+        (data.errors && data.errors[0] && data.errors[0].error) ||
+        "Resolve failed.";
+      showToast(firstError, true);
+    }
+  } catch (e) {
+    showToast("Resolve failed: " + e.message, true);
+  }
+}
+
+function _selectedThreadIds(prNum) {
+  const block = document.querySelector(`[data-pr-unresolved="${prNum}"]`);
+  if (!block) return [];
+  return [...block.querySelectorAll(".comment-item")]
+    .filter((item) => {
+      const checkbox = item.querySelector(".thread-check");
+      return checkbox && checkbox.checked && !checkbox.disabled;
+    })
+    .map((item) => item.dataset.threadId)
+    .filter(Boolean);
+}
+
+window.copyPRReviewComments = function (prNum) {
+  const prData = _findCachedPR(prNum);
+  if (!prData || !prData.unresolved.length) {
+    showToast("No review comments to copy.", true);
+    return;
+  }
+  const text = formatPRReviewComments(prData);
+  const count = prData.unresolved.length;
+  copyTextToClipboard(
+    text,
+    `Copied ${count} review comment${count === 1 ? "" : "s"}.`,
+  );
+};
+
+window.copyReviewComment = function (prNum, commentIndex) {
+  const prData = _findCachedPR(prNum);
+  const comment = prData ? prData.unresolved[commentIndex] : null;
+  if (!prData || !comment) {
+    showToast("Review comment not found.", true);
+    return;
+  }
+  copyTextToClipboard(
+    formatSingleReviewComment(prData, comment, commentIndex),
+    "Copied review comment.",
+  );
+};
+
+function formatPRReviewComments(prData) {
+  return [
+    formatPRHeader(prData),
+    "",
+    ...prData.unresolved.map((comment, commentIndex) =>
+      formatReviewComment(comment, commentIndex),
+    ),
+  ].join("\n");
+}
+
+function formatSingleReviewComment(prData, comment, commentIndex) {
+  return [
+    formatPRHeader(prData),
+    "",
+    formatReviewComment(comment, commentIndex),
+  ].join("\n");
+}
+
+function formatEventReviewComment(event) {
+  return [
+    formatPRHeader({
+      number: event.pr_number,
+      title: event.pr_title || `PR #${event.pr_number}`,
+      url: event.pr_url || EMPTY_METADATA_VALUE,
+    }),
+    "",
+    formatReviewComment(
+      {
+        thread_id: event.thread_id,
+        comment_id: event.comment_id,
+        path: event.path,
+        line: event.line,
+        author: event.author,
+        url: event.github_url || event.url,
+        outdated: event.outdated,
+        body: event.body,
+        snippet: event.snippet,
+      },
+      0,
+    ),
+  ].join("\n");
+}
+
+function formatPRHeader(prData) {
+  return [`PR #${prData.number}: ${prData.title}`, `url: ${prData.url}`].join(
+    "\n",
+  );
+}
+
+function formatReviewComment(comment, commentIndex) {
+  const body = (comment.body || comment.snippet || "").trim();
+  return [
+    `Review comment ${commentIndex + 1}`,
+    `threadId: ${comment.thread_id || EMPTY_METADATA_VALUE}`,
+    `commentId: ${comment.comment_id || EMPTY_METADATA_VALUE}`,
+    `path: ${comment.path || EMPTY_METADATA_VALUE}`,
+    `line: ${comment.line ?? EMPTY_METADATA_VALUE}`,
+    `author: @${comment.author || "unknown"}`,
+    `url: ${comment.url || EMPTY_METADATA_VALUE}`,
+    `outdated: ${Boolean(comment.outdated)}`,
+    "",
+    "body:",
+    body || EMPTY_METADATA_VALUE,
+    "",
+  ].join("\n");
+}
+
+function formatCommentLocation(comment) {
+  if (!comment.path && comment.line == null) return "";
+  const path = comment.path || "Unknown path";
+  return comment.line == null ? path : `${path}:${comment.line}`;
+}
+
+function isCopyableReviewEvent(event) {
+  return (
+    ["new_comment", "reply"].includes(event.type) &&
+    (event.body || event.snippet)
+  );
+}
+
+async function copyTextToClipboard(text, successMessage) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      fallbackCopyText(text);
+    }
+    showToast(successMessage);
+  } catch (error) {
+    console.warn("Failed to copy review comments:", error);
+    showToast("Copy failed. Please try again.", true);
+  }
+}
+
+function fallbackCopyText(text) {
+  const textArea = document.createElement("textarea");
+  textArea.value = text;
+  textArea.setAttribute("readonly", "");
+  textArea.style.position = "fixed";
+  textArea.style.opacity = "0";
+  document.body.appendChild(textArea);
+  textArea.select();
+  const copied = document.execCommand("copy");
+  textArea.remove();
+  if (!copied) throw new Error("Clipboard command failed");
+}
+
 function _findPRData(prNum) {
   const cards = document.querySelectorAll(".card");
   for (const card of cards) {
@@ -833,6 +1197,10 @@ function _findPRData(prNum) {
     }
   }
   return { number: prNum, title: `PR #${prNum}`, url: "#" };
+}
+
+function _findCachedPR(prNum) {
+  return currentPRs.find((prData) => String(prData.number) === String(prNum));
 }
 
 // ── Timestamp ─────────────────────────────────────────────────────────────────

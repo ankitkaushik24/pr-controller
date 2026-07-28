@@ -40,6 +40,8 @@ query($q: String!) {
             id
             isResolved
             isOutdated
+            path
+            line
             comments(first: 50) {
               nodes {
                 id
@@ -82,17 +84,100 @@ query($q: String!) {
 }
 """
 
+_REPLY_MUTATION = """
+mutation($threadId: ID!, $body: String!) {
+  addPullRequestReviewThreadReply(input: {
+    pullRequestReviewThreadId: $threadId
+    body: $body
+  }) {
+    comment {
+      id
+      url
+      bodyText
+      author { login }
+    }
+  }
+}
+"""
+
+_RESOLVE_MUTATION = """
+mutation($threadId: ID!) {
+  resolveReviewThread(input: {threadId: $threadId}) {
+    thread {
+      id
+      isResolved
+    }
+  }
+}
+"""
+
+
+def _graphql(query: str, variables: dict[str, str] | None = None) -> dict:
+    """Run a GraphQL query/mutation via `gh api graphql` and return the JSON payload."""
+    cmd = ["gh", "api", "graphql", "-f", f"query={query}"]
+    for key, value in (variables or {}).items():
+        cmd.extend(["-f", f"{key}={value}"])
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip() or f"exit {result.returncode}"
+        raise RuntimeError(detail)
+    payload = json.loads(result.stdout)
+    errors = payload.get("errors") or []
+    if errors:
+        messages = "; ".join(err.get("message", str(err)) for err in errors)
+        raise RuntimeError(messages)
+    return payload
+
 
 def fetch_prs(author_filter: str = "@me") -> dict:
     """Fetch open PRs authored by the configured GitHub user."""
     search_q = f"is:pr is:open author:{author_filter}".strip()
-    result = subprocess.run(
-        ["gh", "api", "graphql", "-f", f"query={_QUERY}", "-F", f"q={search_q}"],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return json.loads(result.stdout)
+    return _graphql(_QUERY, {"q": search_q})
+
+
+def reply_to_review_thread(thread_id: str, body: str) -> dict:
+    """Post a reply on an existing pull request review thread."""
+    thread_id = (thread_id or "").strip()
+    body = (body or "").strip()
+    if not thread_id:
+        raise ValueError("thread_id is required")
+    if not body:
+        raise ValueError("Reply body cannot be empty")
+    payload = _graphql(_REPLY_MUTATION, {"threadId": thread_id, "body": body})
+    comment = ((payload.get("data") or {}).get("addPullRequestReviewThreadReply") or {}).get("comment")
+    if not comment:
+        raise RuntimeError("GitHub did not return the created reply")
+    return comment
+
+
+def resolve_review_thread(thread_id: str) -> dict:
+    """Mark a single review thread as resolved."""
+    thread_id = (thread_id or "").strip()
+    if not thread_id:
+        raise ValueError("thread_id is required")
+    payload = _graphql(_RESOLVE_MUTATION, {"threadId": thread_id})
+    thread = ((payload.get("data") or {}).get("resolveReviewThread") or {}).get("thread")
+    if not thread:
+        raise RuntimeError("GitHub did not return the resolved thread")
+    return thread
+
+
+def resolve_review_threads(thread_ids: list[str]) -> dict:
+    """Resolve multiple review threads. Returns resolved IDs and per-thread errors."""
+    resolved: list[str] = []
+    errors: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for raw_id in thread_ids:
+        thread_id = (raw_id or "").strip()
+        if not thread_id or thread_id in seen:
+            continue
+        seen.add(thread_id)
+        try:
+            resolve_review_thread(thread_id)
+            resolved.append(thread_id)
+        except Exception as exc:
+            errors.append({"thread_id": thread_id, "error": str(exc)})
+    return {"resolved": resolved, "errors": errors}
 
 
 def get_my_login() -> str:

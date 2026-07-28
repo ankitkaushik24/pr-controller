@@ -42,17 +42,21 @@ def compute(nodes: list) -> list[dict]:
                 change_requesters.append(who)
 
         unresolved = []
-        for t in pr["reviewThreads"]["nodes"]:
-            if t["isResolved"]:
+        for thread in pr["reviewThreads"]["nodes"]:
+            if thread["isResolved"]:
                 continue
-            c = t["comments"]["nodes"][0] if t["comments"]["nodes"] else None
-            full_body = ((c or {}).get("bodyText") or "")
+            comment = thread["comments"]["nodes"][0] if thread["comments"]["nodes"] else None
+            full_body = ((comment or {}).get("bodyText") or "")
             unresolved.append({
-                "author": ((c or {}).get("author") or {}).get("login") or "unknown",
+                "thread_id": thread.get("id") or "",
+                "comment_id": (comment or {}).get("id") or "",
+                "path": thread.get("path") or "",
+                "line": thread.get("line"),
+                "author": ((comment or {}).get("author") or {}).get("login") or "unknown",
                 "body": full_body,
                 "snippet": " ".join(full_body.split())[:140],
-                "url": (c or {}).get("url") or pr["url"],
-                "outdated": t.get("isOutdated", False),
+                "url": (comment or {}).get("url") or pr["url"],
+                "outdated": thread.get("isOutdated", False),
             })
 
         commits = pr["commits"]["nodes"]
