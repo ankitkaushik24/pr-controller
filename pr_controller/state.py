@@ -16,6 +16,7 @@ MAX_EVENTS = 200
 _DEFAULT_STATE: dict = {
     "seen_comment_ids": [],
     "seen_review_ids": [],
+    "dismissed_comment_ids": [],
     "ci_states": {},
     "approval_states": {},
     "baseline_done": False,
@@ -36,6 +37,35 @@ def load_state() -> dict:
 def save_state(state: dict) -> None:
     _ensure_dir()
     _STATE_FILE.write_text(json.dumps(state, indent=2))
+
+
+def dismissed_comment_ids() -> set[str]:
+    """Return locally dismissed conversation comment IDs."""
+    return {
+        str(comment_id)
+        for comment_id in (load_state().get("dismissed_comment_ids") or [])
+        if comment_id
+    }
+
+
+def dismiss_comment_ids(comment_ids: list[str]) -> list[str]:
+    """Persist dismissed conversation comment IDs; return newly added ones."""
+    cleaned = [str(cid).strip() for cid in comment_ids if str(cid).strip()]
+    if not cleaned:
+        return []
+    state = load_state()
+    existing = {
+        str(comment_id)
+        for comment_id in (state.get("dismissed_comment_ids") or [])
+        if comment_id
+    }
+    added = [cid for cid in cleaned if cid not in existing]
+    if not added:
+        return []
+    existing.update(added)
+    state["dismissed_comment_ids"] = sorted(existing)
+    save_state(state)
+    return added
 
 
 def load_events() -> list[dict]:

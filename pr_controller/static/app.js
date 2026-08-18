@@ -9,15 +9,11 @@ const STATE_LABELS = {
   waiting: "waiting on review",
 };
 const EVENT_META = {
-  new_comment: { icon: "💬", label: "commented", cls: "feed-new-comment" },
-  reply: { icon: "↩️", label: "replied", cls: "feed-reply" },
-  ci_fail: { icon: "❌", label: "CI failed", cls: "feed-ci-fail" },
-  approved: { icon: "✅", label: "approved", cls: "feed-approved" },
-  changes_requested: {
-    icon: "✋",
-    label: "requested changes",
-    cls: "feed-changes-requested",
-  },
+  new_comment: { label: "commented" },
+  reply: { label: "replied" },
+  ci_fail: { label: "CI failed" },
+  approved: { label: "approved" },
+  changes_requested: { label: "requested changes" },
 };
 const TEMPLATES = {
   review_request: (pr) =>
@@ -29,39 +25,36 @@ const TEMPLATES = {
 const EMPTY_METADATA_VALUE = "N/A";
 
 // ── App state ─────────────────────────────────────────────────────────────────
-let unreadCount = 0;
 let sseSource = null;
 let slackEnabled = false;
 let reviewers = []; // [{login, email}] from /api/reviewers
 let selectedEmails = new Set();
 let composerPR = null; // currently selected PR context
 let currentPRs = [];
+let pendingDeepLink = null; // { pr, comment, focus } from URL
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", () => {
   const urlParams = new URLSearchParams(window.location.search);
-  const targetEventId = urlParams.get("event");
+  const prParam = urlParams.get("pr");
+  const commentParam = urlParams.get("comment");
+  const focusParam = urlParams.get("focus");
+  if (prParam) {
+    pendingDeepLink = {
+      pr: prParam,
+      comment: commentParam || null,
+      focus: focusParam || null,
+    };
+  }
 
   loadPRs();
   loadReviewers();
   loadSlackConfig();
   connectSSE();
 
-  // Load history, then optionally highlight a specific event from URL param
-  loadEventHistory().then(() => {
-    if (targetEventId) highlightEvent(targetEventId);
-  });
-
   document
     .getElementById("refresh-btn")
     .addEventListener("click", handleRefresh);
-
-  document.getElementById("clear-feed-btn").addEventListener("click", () => {
-    document.getElementById("feed-items").innerHTML = "";
-    unreadCount = 0;
-    renderUnreadBadge();
-    showFeedEmpty(true);
-  });
 
   // Settings modal triggers
   document
@@ -117,22 +110,6 @@ async function loadPRs() {
   } catch (e) {
     document.getElementById("pr-cards").innerHTML =
       `<div class="error-banner">Failed to load PRs: ${esc(e.message)}</div>`;
-  }
-}
-
-async function loadEventHistory() {
-  try {
-    const res = await fetch("/api/events/history?limit=50");
-    const events = await res.json();
-    const feed = document.getElementById("feed-items");
-    feed.innerHTML = "";
-    events.forEach((ev) => feed.appendChild(buildFeedItem(ev, false)));
-    showFeedEmpty(events.length === 0);
-    feed
-      .querySelectorAll(".feed-item")
-      .forEach((el) => el.classList.add("visible"));
-  } catch (e) {
-    console.warn("Failed to load event history:", e);
   }
 }
 
@@ -507,9 +484,7 @@ function connectSSE() {
       loadPRs();
       return;
     }
-    prependFeedItem(event);
-    unreadCount++;
-    renderUnreadBadge();
+    toastForEvent(event);
   };
 
   sseSource.onerror = () => {
@@ -525,148 +500,11 @@ function setConnDot(state) {
   dot.className = "conn-dot " + state;
 }
 
-// ── Activity feed ─────────────────────────────────────────────────────────────
-function prependFeedItem(event) {
-  const feed = document.getElementById("feed-items");
-  const item = buildFeedItem(event, true);
-  feed.insertBefore(item, feed.firstChild);
-  showFeedEmpty(false);
-  requestAnimationFrame(() => item.classList.add("visible"));
-}
-
-function buildFeedItem(event, animate) {
-  const meta = EVENT_META[event.type] || {
-    icon: "📌",
-    label: event.type,
-    cls: "",
-  };
-  const timeStr = formatRelativeTime(event.at);
-  const prLabel = event.pr_title
-    ? `PR #${event.pr_number} — ${event.pr_title.slice(0, 38)}${event.pr_title.length > 38 ? "…" : ""}`
-    : `PR #${event.pr_number}`;
-
-  const githubUrl = event.github_url || event.url || "#";
-  const hasBody =
-    event.body && event.body !== event.snippet && event.body.length > 10;
-  const eventId = event.id || "";
-  const canCopyComment = isCopyableReviewEvent(event);
-
-  const div = document.createElement("div");
-  div.className = `feed-item ${meta.cls}${animate ? "" : " visible"}`;
-  if (eventId) div.dataset.eventId = eventId;
-
-  // PR lookup for composer (try to find from cached PR list)
-  const prNum = event.pr_number;
-
-  div.innerHTML = `
-    <div class="feed-item-header">
-      <span class="feed-item-icon">${meta.icon}</span>
-      <a class="feed-item-pr" href="${esc(githubUrl)}" target="_blank">${esc(prLabel)}</a>
-      <span class="feed-item-time">${timeStr}</span>
-    </div>
-    <div class="feed-item-meta">${event.author ? "@" + esc(event.author) + " " : ""}${meta.label}</div>
-    ${
-      event.snippet
-        ? `<div class="feed-item-snippet">${esc(event.snippet)}</div>`
-        : ""
-    }
-    ${
-      hasBody
-        ? `<div class="feed-item-full" hidden>${esc(event.body)}</div>
-         <button class="expand-btn" onclick="toggleFeedExpand(this)">Show full comment</button>`
-        : ""
-    }
-    <div class="feed-item-footer">
-      <a class="btn-action" href="${esc(githubUrl)}" target="_blank">View on GitHub</a>
-      ${
-        canCopyComment
-          ? `<button class="btn-action btn-action-copy" type="button">📋 Copy</button>`
-          : ""
-      }
-      <button class="btn-action btn-action-slack"
-        onclick="openComposerForEvent(${prNum}, '${esc(event.author || "")}')"
-        title="Message this person in Slack">
-        💬 Slack
-      </button>
-    </div>
-  `;
-  if (canCopyComment) {
-    div.querySelector(".btn-action-copy").addEventListener("click", () => {
-      copyTextToClipboard(
-        formatEventReviewComment(event),
-        "Copied review comment.",
-      );
-    });
-  }
-  return div;
-}
-
-// Global so inline onclick can call it
-window.openComposerForEvent = function (prNum, authorLogin) {
-  // Try to find the PR in the cached card list
-  const cards = document.querySelectorAll(".card");
-  let prData = null;
-  for (const card of cards) {
-    const numEl = card.querySelector(".card-num");
-    if (numEl && numEl.textContent.trim() === `#${prNum}`) {
-      const titleEl = card.querySelector(".card-title");
-      const linkEl = card.querySelector("a.card-title");
-      prData = {
-        number: prNum,
-        title: titleEl ? titleEl.textContent.trim() : `PR #${prNum}`,
-        url: linkEl ? linkEl.href : "#",
-      };
-      break;
-    }
-  }
-
-  // Pre-fill email for the author login if we have it
-  const reviewer = reviewers.find((r) => r.login === authorLogin);
-  openComposer(prData, "comments_addressed", reviewer ? reviewer.email : null);
-};
-
-window.toggleFeedExpand = function (btn) {
-  const fullEl = btn.previousElementSibling;
-  const expanded = !fullEl.hidden;
-  fullEl.hidden = expanded;
-  btn.textContent = expanded ? "Show full comment" : "Collapse";
-};
-
-function highlightEvent(eventId) {
-  if (!eventId) return;
-  const item = document.querySelector(
-    `[data-event-id="${CSS.escape(eventId)}"]`,
-  );
-  if (!item) {
-    showToast("Event not found in current history. It may have been cleared.");
-    return;
-  }
-  item.scrollIntoView({ behavior: "smooth", block: "center" });
-  item.classList.add("feed-item-highlight");
-  // Auto-expand the full body if available
-  const fullEl = item.querySelector(".feed-item-full");
-  const expandBtn = item.querySelector(".expand-btn");
-  if (fullEl) {
-    fullEl.hidden = false;
-    if (expandBtn) expandBtn.textContent = "Collapse";
-  }
-  setTimeout(() => item.classList.remove("feed-item-highlight"), 4000);
-}
-
-function showFeedEmpty(show) {
-  const empty = document.getElementById("feed-empty");
-  if (empty) empty.style.display = show ? "" : "none";
-}
-
-function renderUnreadBadge() {
-  const badge = document.getElementById("unread-badge");
-  if (!badge) return;
-  if (unreadCount > 0) {
-    badge.textContent = unreadCount;
-    badge.style.display = "inline";
-  } else {
-    badge.style.display = "none";
-  }
+function toastForEvent(event) {
+  const meta = EVENT_META[event.type];
+  if (!meta) return;
+  const author = event.author ? `@${event.author} ` : "";
+  showToast(`PR #${event.pr_number} — ${author}${meta.label}`);
 }
 
 // ── Summary chips ─────────────────────────────────────────────────────────────
@@ -705,10 +543,12 @@ function renderCards(prs, cacheReady = true) {
   if (!prs || prs.length === 0) {
     currentPRs = [];
     container.innerHTML = `<div class="empty-state">🎉 No open PRs</div>`;
+    applyPendingDeepLink();
     return;
   }
   currentPRs = prs;
   container.innerHTML = prs.map(buildCard).join("");
+  applyPendingDeepLink();
 }
 
 function buildCard(pr) {
@@ -716,18 +556,39 @@ function buildCard(pr) {
   const ciClass =
     { pass: "ok", fail: "bad", pending: "run", none: "muted" }[pr.ci] ||
     "muted";
+  const conversationComments = Array.isArray(pr.conversation_comments)
+    ? pr.conversation_comments
+    : [];
+  const commitComments = Array.isArray(pr.commit_comments)
+    ? pr.commit_comments
+    : [];
+  const reviewBodyComments = Array.isArray(pr.review_body_comments)
+    ? pr.review_body_comments
+    : [];
 
   const pills = [
-    `<span class="pill pill-ok">✅ ${pr.approvals} approval${pr.approvals !== 1 ? "s" : ""}</span>`,
-    `<span class="pill pill-${ciClass}">${CI_ICON[pr.ci]} CI ${pr.ci}</span>`,
+    `<span class="pill pill-ok" data-focus="approved">✅ ${pr.approvals} approval${pr.approvals !== 1 ? "s" : ""}</span>`,
+    `<span class="pill pill-${ciClass}" data-focus="ci_fail">${CI_ICON[pr.ci]} CI ${pr.ci}</span>`,
   ];
   if (pr.changes_requested)
     pills.push(
-      `<span class="pill pill-bad">✋ ${pr.changes_requested} changes-requested</span>`,
+      `<span class="pill pill-bad" data-focus="changes_requested">✋ ${pr.changes_requested} changes-requested</span>`,
     );
   if (pr.unresolved.length)
     pills.push(
       `<span class="pill pill-bad">🚫 ${pr.unresolved.length} unresolved</span>`,
+    );
+  if (conversationComments.length)
+    pills.push(
+      `<span class="pill pill-muted">💬 ${conversationComments.length} conversation</span>`,
+    );
+  if (commitComments.length)
+    pills.push(
+      `<span class="pill pill-muted">📝 ${commitComments.length} commit</span>`,
+    );
+  if (reviewBodyComments.length)
+    pills.push(
+      `<span class="pill pill-muted">🗣 ${reviewBodyComments.length} review</span>`,
     );
   if (pr.in_progress.length)
     pills.push(
@@ -745,7 +606,7 @@ function buildCard(pr) {
           `<li><a href="${esc(f.url || "#")}" target="_blank">${esc(f.name)}</a></li>`,
       )
       .join("");
-    blocks += `<div class="block"><div class="block-title">⚠️ failing checks</div><ul>${items}</ul></div>`;
+    blocks += `<div class="block" data-focus="ci_fail"><div class="block-title">⚠️ failing checks</div><ul>${items}</ul></div>`;
   }
   if (pr.in_progress.length) {
     const items = pr.in_progress
@@ -759,16 +620,27 @@ function buildCard(pr) {
   if (pr.unresolved.length) {
     const items = pr.unresolved
       .map((comment, commentIndex) => {
-        const short = esc(
-          comment.snippet || (comment.body || "").slice(0, 140),
-        );
         const location = formatCommentLocation(comment);
-        // Show full body if it's meaningfully longer than the snippet
-        const hasMore =
-          comment.body &&
-          comment.body.length > (comment.snippet || "").length + 10;
         const canAct = Boolean(comment.thread_id);
-        return `<li class="comment-item" data-thread-id="${esc(comment.thread_id || "")}">
+        const replies = Array.isArray(comment.replies) ? comment.replies : [];
+        const replyChain =
+          replies.length > 0
+            ? `<ul class="comment-replies" aria-label="Reply chain">
+                ${replies
+                  .map(
+                    (
+                      reply,
+                    ) => `<li class="comment-reply" data-comment-id="${esc(reply.comment_id || "")}">
+                  <div class="comment-reply-header">
+                    <a href="${esc(reply.url || comment.url || "#")}" target="_blank">@${esc(reply.author || "unknown")}</a>
+                  </div>
+                  ${renderCommentBody(reply)}
+                </li>`,
+                  )
+                  .join("")}
+              </ul>`
+            : "";
+        return `<li class="comment-item" data-thread-id="${esc(comment.thread_id || "")}" data-comment-id="${esc(comment.comment_id || "")}">
         <div class="comment-header">
           <div class="comment-select">
             <input
@@ -781,6 +653,11 @@ function buildCard(pr) {
             <span>
               <a href="${esc(comment.url)}" target="_blank">@${esc(comment.author)}${comment.outdated ? " (outdated)" : ""}</a>
               ${location ? `<span class="comment-location">${esc(location)}</span>` : ""}
+              ${
+                replies.length
+                  ? `<span class="comment-reply-count">${replies.length} repl${replies.length === 1 ? "y" : "ies"}</span>`
+                  : ""
+              }
             </span>
           </div>
           <span class="comment-actions">
@@ -789,13 +666,8 @@ function buildCard(pr) {
             <button class="copy-icon-btn" onclick="copyReviewComment(${pr.number}, ${commentIndex})" title="Copy this review comment" aria-label="Copy this review comment">📋</button>
           </span>
         </div>
-        <span class="comment-snippet">${short}</span>
-        ${
-          hasMore
-            ? `<button class="inline-expand-btn" onclick="toggleInlineComment(this)">…more</button>
-          <span class="comment-full hidden">${esc(comment.body)}</span>`
-            : ""
-        }
+        ${renderCommentBody(comment)}
+        ${replyChain}
         <div class="reply-form hidden" id="reply-form-${pr.number}-${commentIndex}">
           <textarea
             class="reply-textarea"
@@ -826,6 +698,25 @@ function buildCard(pr) {
       <ul>${items}</ul>
     </div>`;
   }
+
+  blocks += renderConversationCommentBlock(pr.number, conversationComments);
+  blocks += renderReadonlyCommentBlock(
+    "📝 commit comments",
+    commitComments,
+    (comment) => {
+      const parts = [];
+      if (comment.commit_oid) parts.push(comment.commit_oid);
+      const location = formatCommentLocation(comment);
+      if (location) parts.push(location);
+      return parts.join(" · ");
+    },
+  );
+  blocks += renderReadonlyCommentBlock(
+    "🗣 review comments",
+    reviewBodyComments,
+    (comment) =>
+      comment.state ? comment.state.toLowerCase().replace(/_/g, " ") : "",
+  );
 
   const approversText = pr.approvers.length
     ? pr.approvers.map((a) => "@" + a).join(", ")
@@ -861,9 +752,21 @@ function buildCard(pr) {
   const cardActions = [copyCommentsBtn, reviewerBtns, messageSomeoneBtn]
     .filter(Boolean)
     .join("");
+  const branchRow = pr.branch
+    ? `<div class="card-sub card-branch">
+      <span class="branch-label">branch:</span>
+      <code class="branch-name" title="${esc(pr.branch)}">${esc(pr.branch)}</code>
+      <button
+        class="copy-icon-btn"
+        onclick="copyPRBranch(${pr.number})"
+        title="Copy branch name"
+        aria-label="Copy branch name"
+      >📋</button>
+    </div>`
+    : "";
 
   return `
-<div class="card card-${state}">
+<div class="card card-${state}" data-pr-number="${pr.number}">
   <div class="card-top">
     <span class="card-num">#${pr.number}</span>
     <span class="card-age">${pr.age}d</span>
@@ -871,7 +774,8 @@ function buildCard(pr) {
     <span class="state-badge state-${state}">${STATE_LABELS[state]}</span>
   </div>
   <div class="pills">${pills.join("")}</div>
-  <div class="card-sub">approved by: ${esc(approversText)}</div>
+  ${branchRow}
+  <div class="card-sub" data-focus="approved">approved by: ${esc(approversText)}</div>
   ${blocks}
   ${
     cardActions
@@ -882,6 +786,120 @@ function buildCard(pr) {
       : ""
   }
 </div>`;
+}
+
+function renderConversationCommentBlock(prNumber, comments) {
+  if (!comments.length) return "";
+  const items = comments
+    .map((comment, commentIndex) => {
+      const location = formatCommentLocation(comment);
+      const canDismiss = Boolean(comment.comment_id);
+      return `<li class="comment-item" data-comment-id="${esc(comment.comment_id || "")}">
+        <div class="comment-header">
+          <div class="comment-select">
+            <span>
+              <a href="${esc(comment.url || "#")}" target="_blank">@${esc(comment.author || "unknown")}</a>
+              ${location ? `<span class="comment-location">${esc(location)}</span>` : ""}
+            </span>
+          </div>
+          <span class="comment-actions">
+            <a class="copy-icon-btn" href="${esc(comment.url || "#")}" target="_blank" title="View on GitHub" aria-label="View on GitHub">↗</a>
+            <button
+              class="copy-icon-btn"
+              onclick="dismissOneConversationComment(${prNumber}, ${commentIndex})"
+              title="Dismiss this conversation comment"
+              aria-label="Dismiss this conversation comment"
+              ${canDismiss ? "" : "disabled"}
+            >✕</button>
+          </span>
+        </div>
+        ${renderCommentBody(comment)}
+      </li>`;
+    })
+    .join("");
+  return `<div class="block" data-pr-conversation="${prNumber}">
+    <div class="block-title-row">
+      <div class="block-title">💬 conversation comments</div>
+      <div class="block-title-actions">
+        <button
+          class="btn-action btn-action-dismiss"
+          onclick="dismissAllConversationComments(${prNumber})"
+          title="Dismiss all conversation comments on this PR"
+        >
+          ✕ Dismiss all
+        </button>
+      </div>
+    </div>
+    <ul>${items}</ul>
+  </div>`;
+}
+
+function renderReadonlyCommentBlock(title, comments, locationFn) {
+  if (!comments.length) return "";
+  const items = comments
+    .map((comment) => {
+      const location = locationFn ? locationFn(comment) : "";
+      return `<li class="comment-item" data-comment-id="${esc(comment.comment_id || "")}">
+        <div class="comment-header">
+          <div class="comment-select">
+            <span>
+              <a href="${esc(comment.url || "#")}" target="_blank">@${esc(comment.author || "unknown")}</a>
+              ${location ? `<span class="comment-location">${esc(location)}</span>` : ""}
+            </span>
+          </div>
+          <span class="comment-actions">
+            <a class="copy-icon-btn" href="${esc(comment.url || "#")}" target="_blank" title="View on GitHub" aria-label="View on GitHub">↗</a>
+          </span>
+        </div>
+        ${renderCommentBody(comment)}
+      </li>`;
+    })
+    .join("");
+  return `<div class="block">
+    <div class="block-title">${title}</div>
+    <ul>${items}</ul>
+  </div>`;
+}
+
+function applyPendingDeepLink() {
+  if (!pendingDeepLink) return;
+  const { pr, comment, focus } = pendingDeepLink;
+  const card = document.querySelector(
+    `.card[data-pr-number="${CSS.escape(String(pr))}"]`,
+  );
+  if (!card) {
+    showToast(`PR #${pr} not found on the dashboard.`, true);
+    pendingDeepLink = null;
+    return;
+  }
+
+  let target = card;
+  if (comment) {
+    const commentEl = card.querySelector(
+      `[data-comment-id="${CSS.escape(comment)}"]`,
+    );
+    if (commentEl) {
+      target = commentEl;
+      const fullEl = commentEl.querySelector(".comment-full");
+      const expandBtn = commentEl.querySelector(".inline-expand-btn");
+      if (fullEl && fullEl.classList.contains("hidden")) {
+        fullEl.classList.remove("hidden");
+        if (expandBtn) expandBtn.textContent = "less";
+      }
+    } else {
+      showToast("Comment not found on this PR — it may have been resolved.");
+    }
+  } else if (focus) {
+    const focusEl =
+      card.querySelector(`.block[data-focus="${CSS.escape(focus)}"]`) ||
+      card.querySelector(`[data-focus="${CSS.escape(focus)}"]`);
+    if (focusEl) target = focusEl;
+  }
+
+  target.scrollIntoView({ behavior: "smooth", block: "center" });
+  target.classList.add("deep-link-highlight");
+  setTimeout(() => target.classList.remove("deep-link-highlight"), 4000);
+  pendingDeepLink = null;
 }
 
 // Global for inline onclick in card actions
@@ -955,6 +973,38 @@ window.submitReply = async function (prNum, commentIndex) {
       throw new Error(data.error || `HTTP ${res.status}`);
     if (textarea) textarea.value = "";
     form.classList.add("hidden");
+    if (Array.isArray(data.prs)) {
+      const summary = data.summary || {
+        attention: 0,
+        pending: 0,
+        ready: 0,
+        waiting: 0,
+      };
+      if (!data.summary) {
+        data.prs.forEach((pr) => {
+          summary[classify(pr)] += 1;
+        });
+      }
+      renderSummary(summary);
+      renderCards(data.prs, Boolean(data.generated_at));
+      renderTimestamp(data.generated_at);
+    } else if (data.comment) {
+      const replies = comment.replies || (comment.replies = []);
+      const replyId = data.comment.id || "";
+      if (!replyId || !replies.some((reply) => reply.comment_id === replyId)) {
+        replies.push({
+          comment_id: replyId,
+          author: data.comment.author || "",
+          body: data.comment.body || body,
+          snippet:
+            data.comment.snippet ||
+            (data.comment.body || body).replace(/\s+/g, " ").slice(0, 140),
+          url: data.comment.url || "",
+          created_at: "",
+        });
+      }
+      renderCards(currentPRs, true);
+    }
     showToast("Reply posted.");
   } catch (e) {
     showToast("Reply failed: " + e.message, true);
@@ -1037,6 +1087,62 @@ async function resolveThreads(prNum, threadIds) {
   }
 }
 
+window.dismissOneConversationComment = function (prNum, commentIndex) {
+  const prData = _findCachedPR(prNum);
+  const comment = prData
+    ? (prData.conversation_comments || [])[commentIndex]
+    : null;
+  if (!comment || !comment.comment_id) {
+    showToast("Conversation comment not found.", true);
+    return;
+  }
+  dismissConversationComments(prNum, [comment.comment_id]);
+};
+
+window.dismissAllConversationComments = function (prNum) {
+  const prData = _findCachedPR(prNum);
+  const comments = prData ? prData.conversation_comments || [] : [];
+  if (!comments.length) {
+    showToast("No conversation comments to dismiss.", true);
+    return;
+  }
+  const commentIds = comments.map((comment) => comment.comment_id).filter(Boolean);
+  if (!commentIds.length) {
+    showToast("Missing comment IDs for these conversation comments.", true);
+    return;
+  }
+  dismissConversationComments(prNum, commentIds);
+};
+
+async function dismissConversationComments(prNum, commentIds) {
+  const uniqueIds = [...new Set(commentIds.filter(Boolean))];
+  if (!uniqueIds.length) {
+    showToast("No conversation comments to dismiss.", true);
+    return;
+  }
+  try {
+    const res = await fetch("/api/comments/dismiss", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ comment_ids: uniqueIds }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error)
+      throw new Error(data.error || `HTTP ${res.status}`);
+    if (data.prs) {
+      renderSummary(data.summary);
+      renderCards(data.prs, Boolean(data.generated_at));
+      renderTimestamp(data.generated_at);
+    }
+    const dismissedCount = (data.dismissed || uniqueIds).length;
+    showToast(
+      `Dismissed ${dismissedCount} conversation comment${dismissedCount === 1 ? "" : "s"}.`,
+    );
+  } catch (e) {
+    showToast("Dismiss failed: " + e.message, true);
+  }
+}
+
 function _selectedThreadIds(prNum) {
   const block = document.querySelector(`[data-pr-unresolved="${prNum}"]`);
   if (!block) return [];
@@ -1048,6 +1154,16 @@ function _selectedThreadIds(prNum) {
     .map((item) => item.dataset.threadId)
     .filter(Boolean);
 }
+
+window.copyPRBranch = function (prNum) {
+  const prData = _findCachedPR(prNum);
+  const branch = prData && prData.branch ? String(prData.branch).trim() : "";
+  if (!branch) {
+    showToast("Branch name not available.", true);
+    return;
+  }
+  copyTextToClipboard(branch, `Copied branch: ${branch}`);
+};
 
 window.copyPRReviewComments = function (prNum) {
   const prData = _findCachedPR(prNum);
@@ -1094,40 +1210,18 @@ function formatSingleReviewComment(prData, comment, commentIndex) {
   ].join("\n");
 }
 
-function formatEventReviewComment(event) {
-  return [
-    formatPRHeader({
-      number: event.pr_number,
-      title: event.pr_title || `PR #${event.pr_number}`,
-      url: event.pr_url || EMPTY_METADATA_VALUE,
-    }),
-    "",
-    formatReviewComment(
-      {
-        thread_id: event.thread_id,
-        comment_id: event.comment_id,
-        path: event.path,
-        line: event.line,
-        author: event.author,
-        url: event.github_url || event.url,
-        outdated: event.outdated,
-        body: event.body,
-        snippet: event.snippet,
-      },
-      0,
-    ),
-  ].join("\n");
-}
-
 function formatPRHeader(prData) {
-  return [`PR #${prData.number}: ${prData.title}`, `url: ${prData.url}`].join(
-    "\n",
-  );
+  const lines = [
+    `PR #${prData.number}: ${prData.title}`,
+    `url: ${prData.url}`,
+  ];
+  if (prData.branch) lines.push(`branch: ${prData.branch}`);
+  return lines.join("\n");
 }
 
 function formatReviewComment(comment, commentIndex) {
   const body = (comment.body || comment.snippet || "").trim();
-  return [
+  const lines = [
     `Review comment ${commentIndex + 1}`,
     `threadId: ${comment.thread_id || EMPTY_METADATA_VALUE}`,
     `commentId: ${comment.comment_id || EMPTY_METADATA_VALUE}`,
@@ -1140,20 +1234,40 @@ function formatReviewComment(comment, commentIndex) {
     "body:",
     body || EMPTY_METADATA_VALUE,
     "",
-  ].join("\n");
+  ];
+  const replies = Array.isArray(comment.replies) ? comment.replies : [];
+  replies.forEach((reply, replyIndex) => {
+    const replyBody = (reply.body || reply.snippet || "").trim();
+    lines.push(
+      `reply ${replyIndex + 1}`,
+      `commentId: ${reply.comment_id || EMPTY_METADATA_VALUE}`,
+      `author: @${reply.author || "unknown"}`,
+      `url: ${reply.url || EMPTY_METADATA_VALUE}`,
+      "",
+      "body:",
+      replyBody || EMPTY_METADATA_VALUE,
+      "",
+    );
+  });
+  return lines.join("\n");
+}
+
+function renderCommentBody(comment) {
+  const short = esc(comment.snippet || (comment.body || "").slice(0, 140));
+  const hasMore =
+    comment.body && comment.body.length > (comment.snippet || "").length + 10;
+  return `<span class="comment-snippet">${short}</span>${
+    hasMore
+      ? `<button class="inline-expand-btn" onclick="toggleInlineComment(this)">…more</button>
+        <span class="comment-full hidden">${esc(comment.body)}</span>`
+      : ""
+  }`;
 }
 
 function formatCommentLocation(comment) {
   if (!comment.path && comment.line == null) return "";
   const path = comment.path || "Unknown path";
   return comment.line == null ? path : `${path}:${comment.line}`;
-}
-
-function isCopyableReviewEvent(event) {
-  return (
-    ["new_comment", "reply"].includes(event.type) &&
-    (event.body || event.snippet)
-  );
 }
 
 async function copyTextToClipboard(text, successMessage) {

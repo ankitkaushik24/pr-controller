@@ -44,13 +44,29 @@ def _broadcast(event: dict) -> None:
                 pass
 
 
+def _filter_dismissed_conversation_comments(prs: list[dict]) -> list[dict]:
+    """Hide locally dismissed conversation comments from PR payloads."""
+    dismissed = state_module.dismissed_comment_ids()
+    if not dismissed:
+        return prs
+    for pr in prs:
+        comments = pr.get("conversation_comments") or []
+        pr["conversation_comments"] = [
+            comment
+            for comment in comments
+            if comment.get("comment_id") not in dismissed
+        ]
+    return prs
+
+
 def _update_cache(prs: list[dict]) -> None:
     global _cached_prs, _cached_at
+    filtered = _filter_dismissed_conversation_comments(prs)
     with _cache_lock:
-        _cached_prs = prs
+        _cached_prs = filtered
         _cached_at = datetime.now(timezone.utc).isoformat()
         generated_at = _cached_at
-        count = len(prs)
+        count = len(filtered)
     _broadcast({"type": "prs_updated", "generated_at": generated_at, "count": count})
 
 
@@ -70,6 +86,45 @@ def _remove_resolved_from_cache(thread_ids: list[str]) -> tuple[list[dict], str]
                 for comment in pr.get("unresolved", [])
                 if comment.get("thread_id") not in resolved
             ]
+        _cached_at = datetime.now(timezone.utc).isoformat()
+        prs = list(_cached_prs)
+        generated_at = _cached_at
+    _broadcast({"type": "prs_updated", "generated_at": generated_at, "count": len(prs)})
+    return prs, generated_at
+
+
+def _remove_dismissed_from_cache(comment_ids: list[str]) -> tuple[list[dict], str]:
+    """Drop dismissed conversation comments from the in-memory PR cache."""
+    global _cached_prs, _cached_at
+    dismissed = set(comment_ids)
+    with _cache_lock:
+        for pr in _cached_prs:
+            pr["conversation_comments"] = [
+                comment
+                for comment in pr.get("conversation_comments") or []
+                if comment.get("comment_id") not in dismissed
+            ]
+        _cached_at = datetime.now(timezone.utc).isoformat()
+        prs = list(_cached_prs)
+        generated_at = _cached_at
+    _broadcast({"type": "prs_updated", "generated_at": generated_at, "count": len(prs)})
+    return prs, generated_at
+
+
+def _append_reply_to_cache(thread_id: str, reply: dict) -> tuple[list[dict], str]:
+    """Append a posted reply onto the matching unresolved thread in cache."""
+    global _cached_prs, _cached_at
+    with _cache_lock:
+        for pr in _cached_prs:
+            for comment in pr.get("unresolved", []):
+                if comment.get("thread_id") != thread_id:
+                    continue
+                replies = comment.setdefault("replies", [])
+                reply_id = reply.get("comment_id") or ""
+                if reply_id and any(r.get("comment_id") == reply_id for r in replies):
+                    break
+                replies.append(reply)
+                break
         _cached_at = datetime.now(timezone.utc).isoformat()
         prs = list(_cached_prs)
         generated_at = _cached_at
@@ -188,14 +243,28 @@ def api_thread_reply():
         return jsonify({"error": "Reply body cannot be empty"}), 400
     try:
         comment = reply_to_review_thread(thread_id, reply_body)
+        full_body = comment.get("bodyText") or reply_body
+        reply = {
+            "comment_id": comment.get("id") or "",
+            "author": ((comment.get("author") or {}).get("login") or ""),
+            "body": full_body,
+            "snippet": " ".join(full_body.split())[:140],
+            "url": comment.get("url") or "",
+            "created_at": "",
+        }
+        prs, generated_at = _append_reply_to_cache(thread_id, reply)
         return jsonify({
             "ok": True,
             "comment": {
-                "id": comment.get("id") or "",
-                "url": comment.get("url") or "",
-                "body": comment.get("bodyText") or reply_body,
-                "author": ((comment.get("author") or {}).get("login") or ""),
+                "id": reply["comment_id"],
+                "url": reply["url"],
+                "body": reply["body"],
+                "author": reply["author"],
+                "snippet": reply["snippet"],
             },
+            "prs": prs,
+            "summary": buckets(prs),
+            "generated_at": generated_at,
         })
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
@@ -230,6 +299,33 @@ def api_threads_resolve():
         })
     except Exception as exc:
         log.exception("Failed to resolve review threads")
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/comments/dismiss", methods=["POST"])
+def api_comments_dismiss():
+    """Locally hide conversation comments from the dashboard (does not change GitHub)."""
+    body = request.get_json(silent=True) or {}
+    comment_ids = body.get("comment_ids") or []
+    if isinstance(body.get("comment_id"), str) and body.get("comment_id").strip():
+        comment_ids = [body["comment_id"], *comment_ids]
+    if not isinstance(comment_ids, list) or not comment_ids:
+        return jsonify({"error": "comment_ids is required"}), 400
+    cleaned = [str(cid).strip() for cid in comment_ids if str(cid).strip()]
+    if not cleaned:
+        return jsonify({"error": "comment_ids is required"}), 400
+    try:
+        state_module.dismiss_comment_ids(cleaned)
+        prs, generated_at = _remove_dismissed_from_cache(cleaned)
+        return jsonify({
+            "ok": True,
+            "dismissed": cleaned,
+            "prs": prs,
+            "summary": buckets(prs),
+            "generated_at": generated_at,
+        })
+    except Exception as exc:
+        log.exception("Failed to dismiss conversation comments")
         return jsonify({"error": str(exc)}), 500
 
 

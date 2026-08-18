@@ -4,8 +4,8 @@ from __future__ import annotations
 import json
 import subprocess
 
-# Expanded query: full comment lists per thread, top-level review submissions,
-# reviewer emails (public profile only), and mergeable state.
+# Expanded query: review threads, conversation (issue) comments, commit comments,
+# top-level review submissions, reviewer emails, and mergeable state.
 _QUERY = """
 query($q: String!) {
   search(query: $q, type: ISSUE, first: 50) {
@@ -17,6 +17,7 @@ query($q: String!) {
         createdAt
         updatedAt
         url
+        headRefName
         reviewDecision
         mergeable
         latestOpinionatedReviews(first: 50) {
@@ -49,6 +50,33 @@ query($q: String!) {
                 bodyText
                 createdAt
                 url
+              }
+            }
+          }
+        }
+        comments(first: 50) {
+          nodes {
+            id
+            author { login ... on User { email } }
+            bodyText
+            createdAt
+            url
+          }
+        }
+        prCommits: commits(first: 50) {
+          nodes {
+            commit {
+              oid
+              abbreviatedOid
+              comments(first: 20) {
+                nodes {
+                  id
+                  author { login ... on User { email } }
+                  bodyText
+                  path
+                  createdAt
+                  url
+                }
               }
             }
           }
@@ -220,6 +248,12 @@ def extract_emails_from_nodes(nodes: list) -> dict[str, str]:
             _collect_author(review.get("author"), found)
         for thread in (pr.get("reviewThreads") or {}).get("nodes", []):
             for comment in (thread.get("comments") or {}).get("nodes", []):
+                _collect_author(comment.get("author"), found)
+        for comment in (pr.get("comments") or {}).get("nodes", []):
+            _collect_author(comment.get("author"), found)
+        for pr_commit in (pr.get("prCommits") or {}).get("nodes", []):
+            commit = (pr_commit or {}).get("commit") or {}
+            for comment in (commit.get("comments") or {}).get("nodes", []):
                 _collect_author(comment.get("author"), found)
     return found
 

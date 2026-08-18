@@ -45,18 +45,75 @@ def compute(nodes: list) -> list[dict]:
         for thread in pr["reviewThreads"]["nodes"]:
             if thread["isResolved"]:
                 continue
-            comment = thread["comments"]["nodes"][0] if thread["comments"]["nodes"] else None
-            full_body = ((comment or {}).get("bodyText") or "")
+            comments = thread["comments"]["nodes"] or []
+            root = comments[0] if comments else None
+            full_body = ((root or {}).get("bodyText") or "")
+            replies = []
+            for reply in comments[1:]:
+                reply_body = (reply.get("bodyText") or "")
+                replies.append({
+                    "comment_id": reply.get("id") or "",
+                    "author": ((reply.get("author") or {}).get("login") or "unknown"),
+                    "body": reply_body,
+                    "snippet": " ".join(reply_body.split())[:140],
+                    "url": reply.get("url") or pr["url"],
+                    "created_at": reply.get("createdAt") or "",
+                })
             unresolved.append({
                 "thread_id": thread.get("id") or "",
-                "comment_id": (comment or {}).get("id") or "",
+                "comment_id": (root or {}).get("id") or "",
                 "path": thread.get("path") or "",
                 "line": thread.get("line"),
-                "author": ((comment or {}).get("author") or {}).get("login") or "unknown",
+                "author": ((root or {}).get("author") or {}).get("login") or "unknown",
                 "body": full_body,
                 "snippet": " ".join(full_body.split())[:140],
-                "url": (comment or {}).get("url") or pr["url"],
+                "url": (root or {}).get("url") or pr["url"],
                 "outdated": thread.get("isOutdated", False),
+                "replies": replies,
+            })
+
+        conversation_comments = []
+        for comment in (pr.get("comments") or {}).get("nodes", []):
+            full_body = comment.get("bodyText") or ""
+            conversation_comments.append({
+                "comment_id": comment.get("id") or "",
+                "author": ((comment.get("author") or {}).get("login") or "unknown"),
+                "body": full_body,
+                "snippet": " ".join(full_body.split())[:140],
+                "url": comment.get("url") or pr["url"],
+                "created_at": comment.get("createdAt") or "",
+            })
+
+        commit_comments = []
+        for pr_commit in (pr.get("prCommits") or {}).get("nodes", []):
+            commit = (pr_commit or {}).get("commit") or {}
+            commit_oid = commit.get("abbreviatedOid") or commit.get("oid") or ""
+            for comment in (commit.get("comments") or {}).get("nodes", []):
+                full_body = comment.get("bodyText") or ""
+                commit_comments.append({
+                    "comment_id": comment.get("id") or "",
+                    "author": ((comment.get("author") or {}).get("login") or "unknown"),
+                    "body": full_body,
+                    "snippet": " ".join(full_body.split())[:140],
+                    "url": comment.get("url") or pr["url"],
+                    "path": comment.get("path") or "",
+                    "commit_oid": commit_oid,
+                    "created_at": comment.get("createdAt") or "",
+                })
+
+        review_body_comments = []
+        for review in (pr.get("reviews") or {}).get("nodes", []):
+            full_body = (review.get("body") or "").strip()
+            if not full_body:
+                continue
+            review_body_comments.append({
+                "comment_id": review.get("id") or "",
+                "author": ((review.get("author") or {}).get("login") or "unknown"),
+                "body": full_body,
+                "snippet": " ".join(full_body.split())[:140],
+                "url": review.get("url") or pr["url"],
+                "state": review.get("state") or "",
+                "created_at": review.get("submittedAt") or "",
             })
 
         commits = pr["commits"]["nodes"]
@@ -97,6 +154,7 @@ def compute(nodes: list) -> list[dict]:
             "title": pr["title"],
             "draft": pr["isDraft"],
             "url": pr["url"],
+            "branch": pr.get("headRefName") or "",
             "age": age,
             "approvals": len(approvers),
             "approvers": approvers,
@@ -104,6 +162,9 @@ def compute(nodes: list) -> list[dict]:
             "change_requesters": change_requesters,
             "decision": pr["reviewDecision"],
             "unresolved": unresolved,
+            "conversation_comments": conversation_comments,
+            "commit_comments": commit_comments,
+            "review_body_comments": review_body_comments,
             "ci": ci,
             "build_fails": build_fails,
             "in_progress": in_progress,

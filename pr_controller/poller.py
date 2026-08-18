@@ -39,10 +39,21 @@ def _body(text: str) -> str:
     return (text or "").strip()[:32000]
 
 
-def _local_url(config: dict, event_id: str) -> str:
+def _local_url(
+    config: dict,
+    *,
+    pr_number: int,
+    comment_id: str | None = None,
+    focus: str | None = None,
+) -> str:
     host = config.get("server", {}).get("host", "127.0.0.1")
     port = config.get("server", {}).get("port", 8765)
-    return f"http://{host}:{port}/?event={quote(event_id, safe='')}"
+    params = [f"pr={pr_number}"]
+    if comment_id:
+        params.append(f"comment={quote(comment_id, safe='')}")
+    elif focus:
+        params.append(f"focus={quote(focus, safe='')}")
+    return f"http://{host}:{port}/?{'&'.join(params)}"
 
 
 def poll(config: dict) -> tuple[list[dict] | None, list[dict] | None]:
@@ -82,6 +93,13 @@ def _do_poll(config: dict) -> tuple[list[dict], list[dict]]:
     ci_states: dict[str, str] = state.get("ci_states", {})
     approval_states: dict[str, list[str]] = state.get("approval_states", {})
     baseline_done: bool = state.get("baseline_done", False)
+    # Upgrade-safe: first poll after adding issue/commit watching silently records
+    # existing comments so they do not flood notifications.
+    known_comment_kinds = set(
+        state.get("watched_comment_kinds") or ["review_thread", "review_body"]
+    )
+    issue_comments_ready = "issue" in known_comment_kinds
+    commit_comments_ready = "commit" in known_comment_kinds
 
     new_events: list[dict] = []
     new_seen_comments: set[str] = set()
@@ -130,7 +148,7 @@ def _do_poll(config: dict) -> tuple[list[dict], list[dict]]:
                     "snippet": _snippet(full_body),
                     "github_url": comment.get("url") or pr_url,
                     "url": comment.get("url") or pr_url,
-                    "local_url": _local_url(config, event_id),
+                    "local_url": _local_url(config, pr_number=pr_num, comment_id=cid),
                     "at": _now_iso(),
                 })
 
@@ -151,14 +169,78 @@ def _do_poll(config: dict) -> tuple[list[dict], list[dict]]:
                 "pr_number": pr_num,
                 "pr_title": pr_title,
                 "pr_url": pr_url,
+                "comment_id": rid,
                 "author": author,
                 "body": _body(full_body),
                 "snippet": _snippet(full_body),
                 "github_url": review.get("url") or pr_url,
                 "url": review.get("url") or pr_url,
-                "local_url": _local_url(config, event_id),
+                "local_url": _local_url(config, pr_number=pr_num, comment_id=rid),
                 "at": _now_iso(),
             })
+
+        # ── Conversation-tab (general PR) comments ───────────────────────────
+        for comment in (raw_pr.get("comments") or {}).get("nodes", []):
+            cid = comment.get("id") or ""
+            if not cid:
+                continue
+            new_seen_comments.add(cid)
+            if cid in seen_comments:
+                continue
+            author = (comment.get("author") or {}).get("login", "unknown")
+            if author == my_login or not baseline_done or not issue_comments_ready:
+                continue
+            full_body = comment.get("bodyText", "")
+            event_id = f"new_comment:{pr_num}:{cid}"
+            new_events.append({
+                "id": event_id,
+                "type": "new_comment",
+                "pr_number": pr_num,
+                "pr_title": pr_title,
+                "pr_url": pr_url,
+                "comment_id": cid,
+                "author": author,
+                "body": _body(full_body),
+                "snippet": _snippet(full_body),
+                "github_url": comment.get("url") or pr_url,
+                "url": comment.get("url") or pr_url,
+                "local_url": _local_url(config, pr_number=pr_num, comment_id=cid),
+                "at": _now_iso(),
+            })
+
+        # ── Per-commit comments ──────────────────────────────────────────────
+        for pr_commit in (raw_pr.get("prCommits") or {}).get("nodes", []):
+            commit = (pr_commit or {}).get("commit") or {}
+            commit_oid = commit.get("abbreviatedOid") or commit.get("oid") or ""
+            for comment in (commit.get("comments") or {}).get("nodes", []):
+                cid = comment.get("id") or ""
+                if not cid:
+                    continue
+                new_seen_comments.add(cid)
+                if cid in seen_comments:
+                    continue
+                author = (comment.get("author") or {}).get("login", "unknown")
+                if author == my_login or not baseline_done or not commit_comments_ready:
+                    continue
+                full_body = comment.get("bodyText", "")
+                event_id = f"new_comment:{pr_num}:{cid}"
+                new_events.append({
+                    "id": event_id,
+                    "type": "new_comment",
+                    "pr_number": pr_num,
+                    "pr_title": pr_title,
+                    "pr_url": pr_url,
+                    "comment_id": cid,
+                    "path": comment.get("path") or "",
+                    "commit_oid": commit_oid,
+                    "author": author,
+                    "body": _body(full_body),
+                    "snippet": _snippet(full_body),
+                    "github_url": comment.get("url") or pr_url,
+                    "url": comment.get("url") or pr_url,
+                    "local_url": _local_url(config, pr_number=pr_num, comment_id=cid),
+                    "at": _now_iso(),
+                })
 
         # ── CI failure regression ────────────────────────────────────────────
         curr_ci = pr_data["ci"]
@@ -177,7 +259,7 @@ def _do_poll(config: dict) -> tuple[list[dict], list[dict]]:
                 "snippet": fail_names,
                 "github_url": pr_url,
                 "url": pr_url,
-                "local_url": _local_url(config, event_id),
+                "local_url": _local_url(config, pr_number=pr_num, focus="ci_fail"),
                 "at": _now_iso(),
             })
 
@@ -199,7 +281,7 @@ def _do_poll(config: dict) -> tuple[list[dict], list[dict]]:
                     "snippet": text,
                     "github_url": pr_url,
                     "url": pr_url,
-                    "local_url": _local_url(config, event_id),
+                    "local_url": _local_url(config, pr_number=pr_num, focus="approved"),
                     "at": _now_iso(),
                 })
 
@@ -221,7 +303,9 @@ def _do_poll(config: dict) -> tuple[list[dict], list[dict]]:
                         "snippet": text,
                         "github_url": pr_url,
                         "url": pr_url,
-                        "local_url": _local_url(config, event_id),
+                        "local_url": _local_url(
+                            config, pr_number=pr_num, focus="changes_requested"
+                        ),
                         "at": _now_iso(),
                     })
 
@@ -234,6 +318,12 @@ def _do_poll(config: dict) -> tuple[list[dict], list[dict]]:
     state["ci_states"] = new_ci_states
     state["approval_states"] = {k: list(v) for k, v in new_approval_states.items()}
     state["baseline_done"] = True
+    state["watched_comment_kinds"] = [
+        "review_thread",
+        "review_body",
+        "issue",
+        "commit",
+    ]
     save_state(state)
 
     # Filter to allowed types and persist events
@@ -272,6 +362,16 @@ def _update_email_cache(valid_nodes: list) -> None:
                 all_logins.add(login)
         for thread in (pr.get("reviewThreads") or {}).get("nodes", []):
             for comment in (thread.get("comments") or {}).get("nodes", []):
+                login = (comment.get("author") or {}).get("login")
+                if login:
+                    all_logins.add(login)
+        for comment in (pr.get("comments") or {}).get("nodes", []):
+            login = (comment.get("author") or {}).get("login")
+            if login:
+                all_logins.add(login)
+        for pr_commit in (pr.get("prCommits") or {}).get("nodes", []):
+            commit = (pr_commit or {}).get("commit") or {}
+            for comment in (commit.get("comments") or {}).get("nodes", []):
                 login = (comment.get("author") or {}).get("login")
                 if login:
                     all_logins.add(login)

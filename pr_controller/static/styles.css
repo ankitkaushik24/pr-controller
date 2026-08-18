@@ -18,7 +18,6 @@
   --green-bg: #dafbe1;
   --purple-bg: #f5f0ff;
 
-  --sidebar-w: 320px;
   --header-h: 57px;
   --summary-h: 48px;
 }
@@ -79,6 +78,11 @@ a {
   font-size: 17px;
   font-weight: 700;
   margin: 0;
+}
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 .header-right {
   display: flex;
@@ -143,17 +147,11 @@ a {
   color: var(--green);
 }
 
-/* ── Two-column layout ───────────────────────────────────────────────────── */
-.layout {
-  display: grid;
-  grid-template-columns: 1fr var(--sidebar-w);
-  height: calc(100vh - var(--header-h) - var(--summary-h));
-}
-
-/* ── PR Cards ────────────────────────────────────────────────────────────── */
+/* ── Main layout ─────────────────────────────────────────────────────────── */
 .main {
   padding: 16px 24px;
   overflow-y: auto;
+  height: calc(100vh - var(--header-h) - var(--summary-h));
 }
 
 .card {
@@ -209,6 +207,25 @@ a {
   font-size: 12px;
   color: var(--muted);
   margin-top: 6px;
+}
+.card-branch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.branch-label {
+  flex-shrink: 0;
+}
+.branch-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: var(--text);
+  background: transparent;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .state-badge {
@@ -300,6 +317,29 @@ a {
   color: var(--muted);
   font-size: 12px;
   margin-left: 6px;
+}
+.comment-reply-count {
+  color: var(--muted);
+  font-size: 12px;
+  margin-left: 6px;
+}
+.comment-replies {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0 0 0 14px;
+  border-left: 2px solid var(--border);
+}
+.comment-reply {
+  margin: 0 0 8px;
+  padding-left: 10px;
+}
+.comment-reply:last-child {
+  margin-bottom: 0;
+}
+.comment-reply-header {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 2px;
 }
 .comment-select {
   display: flex;
@@ -409,134 +449,6 @@ a {
   font-size: 13px;
 }
 
-/* ── Activity sidebar ────────────────────────────────────────────────────── */
-.sidebar {
-  border-left: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  background: var(--surface);
-}
-.sidebar-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-.sidebar-title {
-  font-size: 13px;
-  font-weight: 700;
-  flex: 1;
-}
-
-.unread-badge {
-  background: var(--red);
-  color: #fff;
-  font-size: 11px;
-  font-weight: 700;
-  padding: 2px 7px;
-  border-radius: 10px;
-  min-width: 20px;
-  text-align: center;
-  display: none;
-}
-
-.clear-btn {
-  font-size: 12px;
-  padding: 3px 8px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-}
-.clear-btn:hover {
-  background: var(--border);
-}
-
-.feed-empty {
-  padding: 32px 16px;
-  text-align: center;
-  font-size: 13px;
-  color: var(--muted);
-}
-.feed-items {
-  overflow-y: auto;
-  flex: 1;
-  padding: 8px;
-}
-
-.feed-item {
-  padding: 10px 12px;
-  border-radius: 6px;
-  margin-bottom: 6px;
-  border-left: 3px solid transparent;
-  background: var(--bg);
-  font-size: 13px;
-  transform: translateX(8px);
-  opacity: 0;
-  transition:
-    transform 0.2s ease,
-    opacity 0.2s ease;
-}
-.feed-item.visible {
-  transform: translateX(0);
-  opacity: 1;
-}
-
-.feed-new-comment {
-  border-left-color: #0969da;
-}
-.feed-reply {
-  border-left-color: var(--purple);
-}
-.feed-ci-fail {
-  border-left-color: var(--red);
-}
-.feed-approved {
-  border-left-color: var(--green);
-}
-.feed-changes-requested {
-  border-left-color: var(--orange);
-}
-
-.feed-item-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 3px;
-}
-.feed-item-icon {
-  font-size: 14px;
-}
-.feed-item-pr {
-  font-weight: 600;
-  text-decoration: none;
-  color: var(--link);
-  flex: 1;
-}
-.feed-item-time {
-  font-size: 11px;
-  color: var(--muted);
-  white-space: nowrap;
-}
-.feed-item-meta {
-  font-size: 12px;
-  color: var(--muted);
-}
-.feed-item-snippet {
-  font-size: 12px;
-  color: var(--text);
-  opacity: 0.8;
-  margin-top: 3px;
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-}
-
 /* ── SSE connection indicator ────────────────────────────────────────────── */
 .conn-dot {
   width: 7px;
@@ -585,20 +497,6 @@ a {
   }
 }
 
-/* ── Responsive (narrow screens) ─────────────────────────────────────────── */
-@media (max-width: 860px) {
-  .layout {
-    grid-template-columns: 1fr;
-    grid-template-rows: 1fr 280px;
-    height: auto;
-    min-height: calc(100vh - var(--header-h) - var(--summary-h));
-  }
-  .sidebar {
-    border-left: none;
-    border-top: 1px solid var(--border);
-  }
-}
-
 /* ── Slack settings button ───────────────────────────────────────────────── */
 .settings-btn {
   display: flex;
@@ -632,54 +530,7 @@ a {
   background: #4a154b;
 } /* Slack purple */
 
-/* ── Feed item actions + expand ──────────────────────────────────────────── */
-.feed-item-body {
-  margin-top: 4px;
-}
-
-.feed-item-snippet {
-  font-size: 12px;
-  color: var(--text);
-  opacity: 0.8;
-}
-
-.feed-item-full {
-  font-size: 12px;
-  color: var(--text);
-  opacity: 0.85;
-  white-space: pre-wrap;
-  word-break: break-word;
-  margin-top: 4px;
-  padding: 8px 10px;
-  background: var(--bg);
-  border-radius: 4px;
-  border: 1px solid var(--border);
-  max-height: 240px;
-  overflow-y: auto;
-}
-
-.expand-btn {
-  display: inline;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--link);
-  background: none;
-  border: none;
-  cursor: pointer;
-  padding: 2px 0;
-}
-.expand-btn:hover {
-  text-decoration: underline;
-}
-
-.feed-item-footer {
-  display: flex;
-  gap: 8px;
-  margin-top: 8px;
-  flex-wrap: wrap;
-}
-
-/* ── PR card unresolved comment expand ───────────────────────────────────── */
+/* ── PR card comment expand ──────────────────────────────────────────────── */
 .comment-snippet {
   font-size: 13px;
 }
@@ -757,6 +608,14 @@ a {
 .btn-action-resolve:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+.btn-action-dismiss {
+  border-color: rgba(110, 119, 129, 0.4);
+  color: var(--muted);
+}
+.btn-action-dismiss:hover:not(:disabled) {
+  background: rgba(110, 119, 129, 0.12);
+  color: var(--text);
 }
 .btn-action-slack {
   border-color: rgba(74, 21, 75, 0.3);
@@ -982,8 +841,8 @@ a {
   color: var(--text);
 }
 
-/* ── Feed item highlight (event deep-link) ───────────────────────────────── */
-.feed-item-highlight {
+/* ── Deep-link highlight (notification → card/comment) ───────────────────── */
+.deep-link-highlight {
   outline: 2px solid var(--link);
   outline-offset: 2px;
   animation: highlight-pulse 1.2s ease 2;

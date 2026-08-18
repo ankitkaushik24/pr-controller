@@ -11,12 +11,11 @@ It is intentionally local-first:
 
 ## What This App Does
 
-- Shows your open PRs with approvals, unresolved review comments, CI status, and current review state.
-- Polls GitHub for new review comments, replies to your comments, CI regressions, approvals, and change requests.
+- Shows your open PRs with approvals, unresolved review comments, conversation and commit comments, CI status, and current review state.
+- Polls GitHub for new review comments, conversation-tab PR comments, commit comments, replies to your comments, CI regressions, approvals, and change requests.
 - Lets you reply to review comments and resolve one or many unresolved threads from the dashboard.
 - Sends macOS notifications for new PR activity.
-- Opens the dashboard when a clickable notification is selected, when `terminal-notifier` is installed.
-- Keeps an activity feed with full comment bodies available from the UI.
+- Opens the dashboard to the matching PR card (and comment, when available) when a clickable notification is selected, when `terminal-notifier` is installed.
 - Lets you send Slack Workflow messages to reviewers by email, such as "comments addressed" or "please review this PR".
 
 ## Prerequisites
@@ -41,7 +40,7 @@ Optional but recommended for clickable notifications:
 brew install terminal-notifier
 ```
 
-Without `terminal-notifier`, notifications still appear through `osascript`, but clicking them will not reliably navigate back to the dashboard.
+Without `terminal-notifier`, notifications still appear through `osascript`, but clicking them will not reliably open the dashboard to the PR card or comment.
 
 ## First-Time Setup
 
@@ -130,7 +129,7 @@ In PR Controller:
 1. Open the dashboard.
 2. Use the Slack settings control.
 3. Paste the webhook URL.
-4. Send a test or compose a PR follow-up from a PR card/activity item.
+4. Send a test or compose a PR follow-up from a PR card.
 
 Webhook URLs are stored locally in:
 
@@ -157,11 +156,13 @@ python3 -m pr_controller poll
 Use the dashboard to:
 
 - Refresh PR status manually.
-- Read the activity feed.
+- Read unresolved review threads plus conversation, commit, and review-body comments on each PR card.
 - Expand full comment bodies.
 - Reply to unresolved review comments.
 - Resolve selected or all unresolved review threads.
+- Dismiss conversation comments locally (hides them on the dashboard; does not change GitHub).
 - Open GitHub links for comments or PRs.
+- Jump from a notification click to the matching PR card and comment via `?pr=` / `?comment=` / `?focus=` deep links.
 - Send Slack follow-ups to reviewers by email.
 
 Common Slack follow-up examples:
@@ -205,10 +206,10 @@ pr-controller/
 ## How The Pieces Fit
 
 - `pr_controller/__main__.py` loads config and dispatches `serve` or `poll`.
-- `pr_controller/server.py` owns Flask routes, cached PR state, Slack API endpoints, and SSE activity streaming.
+- `pr_controller/server.py` owns Flask routes, cached PR state, Slack API endpoints, and SSE event streaming.
 - `pr_controller/github_client.py` shells out to `gh api graphql` and fetches PR, review, comment, CI, and public email data.
-- `pr_controller/parser.py` converts GraphQL PR nodes into dashboard-ready PR summaries.
-- `pr_controller/poller.py` diffs current GitHub state against local state and emits activity events.
+- `pr_controller/parser.py` converts GraphQL PR nodes into dashboard-ready PR summaries, including unresolved threads and other comment kinds.
+- `pr_controller/poller.py` diffs current GitHub state against local state and emits activity events with deep-link URLs into PR cards.
 - `pr_controller/notifier.py` sends macOS notifications.
 - `pr_controller/slack.py` stores the webhook URL and posts Slack Workflow payloads.
 - `pr_controller/state.py` stores seen IDs, event history, and reviewer email cache under `~/.pr-controller`.
@@ -231,8 +232,8 @@ Runtime state lives outside the repo:
 
 Notes:
 
-- `state.json` tracks seen comments/reviews and prevents duplicate notifications.
-- `events.json` stores recent activity feed items.
+- `state.json` tracks seen comments/reviews, dismissed conversation comment IDs, and prevents duplicate notifications.
+- `events.json` stores recent poller events (used for history/debug; the UI deep-links into PR cards instead of showing a feed).
 - `email_cache.json` stores public GitHub profile emails discovered during polling.
 - `slack.json` stores the Slack Workflow webhook URL and must remain secret.
 
@@ -243,11 +244,12 @@ Primary local endpoints:
 - `GET /` serves the dashboard.
 - `GET /api/prs` returns current cached PR data.
 - `POST /api/refresh` runs a poll immediately and updates the cache.
-- `GET /api/events` streams live events through Server-Sent Events.
-- `GET /api/events/history` returns recent activity history.
+- `GET /api/events` streams live events through Server-Sent Events (toasts + PR refresh).
+- `GET /api/events/history` returns recent poller event history.
 - `GET /api/reviewers` returns cached reviewer email suggestions.
 - `POST /api/threads/reply` posts a reply to a review thread (`thread_id`, `body`).
 - `POST /api/threads/resolve` resolves one or more review threads (`thread_ids`).
+- `POST /api/comments/dismiss` locally hides conversation comments (`comment_ids`; does not change GitHub).
 - `GET /api/slack/config` returns Slack configuration status.
 - `POST /api/slack/config` saves a Slack webhook URL.
 - `DELETE /api/slack/config` removes the saved webhook URL.
@@ -341,4 +343,3 @@ scripts/install.sh
 - Do not commit files from `~/.pr-controller`.
 - Treat Slack Workflow webhook URLs like secrets.
 - GitHub access is whatever the local `gh` CLI can access.
-
